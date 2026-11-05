@@ -27,7 +27,7 @@ fi
 # Preguntar por el disco de 4TB (con confirmación explícita)
 echo
 echo "⚠️  ATENCIÓN: El siguiente paso formateará un disco completo."
-read -r -p "Introduce el dispositivo del disco de 4TB para Seafile (ej. /dev/sdb): " DISCO
+read -r -p "Introduce el dispositivo del disco de 4TB (ej. /dev/sda): " DISCO
 if [[ -z "$DISCO" ]]; then
     echo "❌ No se ha indicado ningún disco. Abortando por seguridad."
     exit 1
@@ -57,8 +57,6 @@ echo "✅ Firewalld configurado. SSH permitido. Puerto 8090 (1Panel) abierto sol
 # --- 4. Instalar 1Panel (modo no interactivo para automatizar) ---
 echo
 echo ">>> Instalando 1Panel (modo no interactivo)..."
-# Usamos las variables de entorno para evitar las preguntas del instalador.
-# Se instala Docker automáticamente (PANEL_INSTALL_DOCKER=y).
 PANEL_NON_INTERACTIVE=true \
 PANEL_LANG=en \
 PANEL_PORT=8090 \
@@ -80,12 +78,10 @@ echo "✅ Cockpit instalado y escuchando en el puerto 9090."
 # --- 6. Desplegar NetBird (cliente) usando Docker ---
 echo
 echo ">>> Preparando NetBird..."
-# Pedir la setup key al usuario (también de forma segura)
 read -r -s -p "Introduce tu Setup Key de NetBird: " NB_KEY; echo
 if [[ -z "$NB_KEY" ]]; then
     echo "⚠️  No se ha introducido Setup Key. NetBird no se iniciará."
 else
-    # Verificar que Docker está corriendo (1Panel lo instaló)
     if command -v docker &> /dev/null && sudo docker info &> /dev/null; then
         sudo docker run --network host --privileged --rm -d \
           --name netbird \
@@ -99,29 +95,45 @@ else
     unset NB_KEY
 fi
 
-# --- 7. Preparar el disco de 4 TB para Seafile ---
+# --- 7. Preparar el disco de 4 TB como almacenamiento compartido ---
 echo
-echo ">>> Preparando el disco $DISCO para Seafile..."
+echo ">>> Preparando el disco $DISCO como almacenamiento compartido..."
 # ADVERTENCIA: Esto borra el disco.
 sudo parted "$DISCO" mklabel gpt
 sudo parted -a opt "$DISCO" mkpart primary ext4 0% 100%
-# Formatear la primera partición
 sudo mkfs.ext4 "${DISCO}1"
-# Crear punto de montaje y montar
-sudo mkdir -p /mnt/datos-seafile
+
+# Punto de montaje genérico
+sudo mkdir -p /mnt/datos
+
 # Añadir a fstab para montaje persistente
 UUID=$(sudo blkid -s UUID -o value "${DISCO}1")
 if [[ -n "$UUID" ]]; then
-    echo "UUID=$UUID /mnt/datos-seafile ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab
+    echo "UUID=$UUID /mnt/datos ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab
     sudo mount -a
-    echo "✅ Disco montado en /mnt/datos-seafile."
+    echo "✅ Disco montado en /mnt/datos."
 else
     echo "❌ No se pudo obtener el UUID del disco. Revisa manualmente."
 fi
-# Crear subcarpeta para los datos de Seafile y ajustar permisos (UID típico de Seafile en contenedor)
-sudo mkdir -p /mnt/datos-seafile/seafile-data
-sudo chown -R 2016:2016 /mnt/datos-seafile/seafile-data
-echo "✅ Carpeta de datos de Seafile preparada en /mnt/datos-seafile/seafile-data."
+
+# Crear subcarpetas para cada aplicación
+echo ">>> Creando subcarpetas para las aplicaciones..."
+sudo mkdir -p /mnt/datos/seafile-data
+sudo mkdir -p /mnt/datos/notes
+sudo mkdir -p /mnt/datos/calibre-library
+sudo mkdir -p /mnt/datos/linkwarden
+
+# Permisos para Seafile (UID típico del contenedor)
+sudo chown -R 2016:2016 /mnt/datos/seafile-data
+
+# Permisos genéricos para el resto (ajusta según la app)
+sudo chmod 755 /mnt/datos/notes /mnt/datos/calibre-library /mnt/datos/linkwarden
+
+echo "✅ Carpetas creadas:"
+echo "   - /mnt/datos/seafile-data"
+echo "   - /mnt/datos/notes"
+echo "   - /mnt/datos/calibre-library"
+echo "   - /mnt/datos/linkwarden"
 
 # --- 8. Mensaje final ---
 echo
@@ -133,8 +145,9 @@ echo "1. Acceder a 1Panel (https://IP:8090) y desplegar desde su tienda:"
 echo "   - Nginx Proxy Manager"
 echo "   - Pi-hole"
 echo "   - Unbound"
-echo "   - Seafile (mapeando el volumen /shared a /mnt/datos-seafile/seafile-data)"
+echo "   - Seafile (mapeando el volumen /shared a /mnt/datos/seafile-data)"
 echo "2. Desplegar Collabora manualmente (contenedor 'collabora/code:latest', puerto 9980)."
 echo "3. Configurar NPM: Proxy Hosts para Seafile y Collabora (con SSL y Websockets)."
 echo "4. Editar seahub_settings.py en el contenedor de Seafile para enlazar con Collabora."
+echo "5. Para otras apps (notas, libros, bookmarks), mapea sus volúmenes a las carpetas correspondientes en /mnt/datos/."
 echo
